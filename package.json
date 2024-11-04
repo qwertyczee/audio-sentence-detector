@@ -34,10 +34,10 @@
     },
     "repository": {
         "type": "git",
-        "url": "git+https://github.com/qwertyczee/audio-segments-detector.git"
+        "url": "git+https://github.com/qwertyczee/audio-sentence-detector.git"
     },
     "bugs": {
-        "url": "https://github.com/qwertyczee/audio-segments-detector/issues"
+        "url": "https://github.com/qwertyczee/audio-sentence-detector/issues"
     },
     "engines": {
         "node": ">=14.0.0"
