@@ -1,0 +1,45 @@
+{
+    "name": "audio-sentence-detector",
+    "version": "1.0.0",
+    "description": "A Node.js library for detecting sentence boundaries in audio files using silence detection",
+    "main": "src/index.js",
+    "types": "types/index.d.ts",
+    "scripts": {
+        "test": "jest",
+        "build": "tsc",
+        "lint": "eslint src/**/*.js",
+        "prepare": "npm run build"
+    },
+    "keywords": [
+        "audio",
+        "speech",
+        "sentence-detection",
+        "wav",
+        "audio-processing",
+        "speech-processing"
+    ],
+    "author": "",
+    "license": "MIT",
+    "dependencies": {
+        "node-wav": "^0.0.2",
+        "fluent-ffmpeg": "^2.1.2",
+        "ffmpeg-static": "^5.2.0"
+    },
+    "devDependencies": {
+        "jest": "^29.7.0",
+        "eslint": "^8.56.0",
+        "typescript": "^5.3.3",
+        "@types/node": "^20.11.0",
+        "@types/jest": "^29.5.11"
+    },
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/qwertyczee/audio-segments-detector.git"
+    },
+    "bugs": {
+        "url": "https://github.com/qwertyczee/audio-segments-detector/issues"
+    },
+    "engines": {
+        "node": ">=14.0.0"
+    }
+}
