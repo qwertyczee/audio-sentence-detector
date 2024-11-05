@@ -1,5 +1,5 @@
 declare module 'audio-sentence-detector' {
-    export interface AudioSentenceDetectorOptions {
+    interface AudioSentenceDetectorOptions {
         minSilenceDuration?: number;
         silenceThreshold?: number;
         minSentenceLength?: number;
@@ -7,17 +7,24 @@ declare module 'audio-sentence-detector' {
         windowSize?: number;
         idealSentenceLength?: number;
         idealSilenceDuration?: number;
+        fundamentalFreqMin?: number;
+        fundamentalFreqMax?: number;
+        voiceActivityThreshold?: number;
+        minVoiceActivityDuration?: number;
+        energySmoothing?: number;
+        formantEmphasis?: number;
+        zeroCrossingRateThreshold?: number;
         debug?: boolean;
     }
     
-    export interface SilentRegion {
+    interface SilentRegion {
         start: number;
         end: number;
         duration: number;
         avgRMS: number;
     }
     
-    export interface Sentence {
+    interface Sentence {
         index: number;
         start: number;
         end: number;
@@ -25,23 +32,11 @@ declare module 'audio-sentence-detector' {
         probability: number;
     }
     
-    export default class AudioSentenceDetector {
+    class AudioSentenceDetector {
         constructor(options?: AudioSentenceDetectorOptions);
-        processBuffer(buffer: Buffer): Promise<Sentence[]>;
+        detect(buffer: Buffer): Promise<Sentence[]>;
         detectSentences(buffer: Buffer): Promise<Sentence[]>;
-        private convertToMono(channelData: Float32Array[]): Float32Array;
-        private calculateRMSLevel(audioData: Float32Array, startIdx: number, endIdx: number): number;
-        private detectSilentRegions(audioData: Float32Array, sampleRate: number): SilentRegion[];
-        private calculateSentenceProbability(
-            sentence: Omit<Sentence, 'probability'>,
-            audioData: Float32Array,
-            sampleRate: number,
-            silentRegion: SilentRegion | null
-        ): number;
-        private findSentenceBoundaries(
-            silentRegions: SilentRegion[],
-            audioData: Float32Array,
-            sampleRate: number
-        ): Sentence[];
     }
+    
+    export = AudioSentenceDetector;
 }

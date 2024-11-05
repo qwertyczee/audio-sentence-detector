@@ -1,7 +1,7 @@
 {
     "name": "audio-sentence-detector",
-    "version": "1.0.0",
-    "description": "A Node.js library for detecting sentence boundaries in audio files using silence detection",
+    "version": "1.0.1",
+    "description": "Advanced audio sentence detection using signal processing and voice activity detection",
     "main": "src/index.js",
     "types": "types/index.d.ts",
     "scripts": {
@@ -11,25 +11,19 @@
     "keywords": [
         "audio",
         "speech",
-        "sentence-detection",
+        "detection",
+        "sentence",
+        "voice",
+        "signal-processing",
         "wav",
-        "audio-processing",
-        "speech-processing"
+        "ffmpeg",
+        "speech-recognition",
+        "audio-processing"
     ],
-    "author": "",
+    "author": {
+        "name": "im_justmatthew"
+    },
     "license": "MIT",
-    "dependencies": {
-        "node-wav": "^0.0.2",
-        "fluent-ffmpeg": "^2.1.2",
-        "ffmpeg-static": "^5.2.0"
-    },
-    "devDependencies": {
-        "jest": "^29.7.0",
-        "eslint": "^8.56.0",
-        "typescript": "^5.3.3",
-        "@types/node": "^20.11.0",
-        "@types/jest": "^29.5.11"
-    },
     "repository": {
         "type": "git",
         "url": "git+https://github.com/qwertyczee/audio-sentence-detector.git"
@@ -37,7 +31,27 @@
     "bugs": {
         "url": "https://github.com/qwertyczee/audio-sentence-detector/issues"
     },
+    "homepage": "https://github.com/qwertyczee/audio-sentence-detector#readme",
+    "dependencies": {
+        "ffmpeg-static": "^5.2.0",
+        "fluent-ffmpeg": "^2.1.2",
+        "wav-decoder": "^1.3.0"
+    },
+    "devDependencies": {
+        "@types/node": "^20.0.0",
+        "@typescript-eslint/eslint-plugin": "^6.0.0",
+        "@typescript-eslint/parser": "^6.0.0",
+        "eslint": "^8.0.0",
+        "jest": "^29.0.0",
+        "typescript": "^5.0.0"
+    },
     "engines": {
         "node": ">=14.0.0"
-    }
+    },
+    "files": [
+        "src/",
+        "types/",
+        "LICENSE",
+        "README.md"
+    ]
 }
