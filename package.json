@@ -31,7 +31,6 @@
     "bugs": {
         "url": "https://github.com/qwertyczee/audio-sentence-detector/issues"
     },
-    "homepage": "https://github.com/qwertyczee/audio-sentence-detector#readme",
     "dependencies": {
         "ffmpeg-static": "^5.2.0",
         "fluent-ffmpeg": "^2.1.2",
