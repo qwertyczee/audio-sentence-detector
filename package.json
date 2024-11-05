@@ -1,6 +1,6 @@
 {
     "name": "audio-sentence-detector",
-    "version": "1.0.2",
+    "version": "1.0.3",
     "description": "Advanced audio sentence detection using signal processing and voice activity detection",
     "main": "src/index.js",
     "types": "types/index.d.ts",
