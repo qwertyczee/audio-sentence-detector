@@ -47,11 +47,5 @@
     },
     "engines": {
         "node": ">=14.0.0"
-    },
-    "files": [
-        "src/",
-        "types/",
-        "LICENSE",
-        "README.md"
-    ]
+    }
 }
