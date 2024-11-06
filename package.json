@@ -1,6 +1,6 @@
 {
     "name": "audio-sentence-detector",
-    "version": "1.0.3",
+    "version": "1.0.4",
     "description": "Advanced audio sentence detection using signal processing and voice activity detection",
     "main": "src/index.js",
     "types": "types/index.d.ts",
@@ -14,10 +14,10 @@
         "detection",
         "sentence",
         "voice",
-        "signal-processing",
+        "silence-detection",
+        "sentence-detection",
         "wav",
-        "ffmpeg",
-        "speech-recognition",
+        "speech-analysis",
         "audio-processing"
     ],
     "author": {
@@ -32,9 +32,7 @@
         "url": "https://github.com/qwertyczee/audio-sentence-detector/issues"
     },
     "dependencies": {
-        "ffmpeg-static": "^5.2.0",
-        "fluent-ffmpeg": "^2.1.2",
-        "wav-decoder": "^1.3.0"
+        "web-audio-api": "^0.2.2"
     },
     "devDependencies": {
         "jest": "^29.7.0",

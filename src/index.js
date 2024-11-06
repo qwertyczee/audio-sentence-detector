@@ -1,37 +1,31 @@
-const { Readable } = require('stream');
-const wav = require('wav-decoder');
-const ffmpeg = require('fluent-ffmpeg');
-const ffmpegPath = require('ffmpeg-static');
-ffmpeg.setFfmpegPath(ffmpegPath);
-const fs = require('fs').promises;
-const path = require('path');
-const os = require('os');
+const AudioContext = require('web-audio-api').AudioContext;
 
 class AudioSentenceDetector {
     constructor(options = {}) {
         this.options = {
-            minSilenceDuration: options.minSilenceDuration || 0.5,      // seconds
-            silenceThreshold: options.silenceThreshold || 0.01,         // amplitude (0-1)
-            minSentenceLength: options.minSentenceLength || 1,          // seconds
-            maxSentenceLength: options.maxSentenceLength || 15,         // seconds
-            windowSize: options.windowSize || 2048,                     // samples
-            idealSentenceLength: options.idealSentenceLength || 5,      // seconds
-            idealSilenceDuration: options.idealSilenceDuration || 0.8,  // seconds
+            minSilenceDuration: options.minSilenceDuration || 0.5,
+            silenceThreshold: options.silenceThreshold || 0.01,
+            minSentenceLength: options.minSentenceLength || 1,
+            maxSentenceLength: options.maxSentenceLength || 15,
+            windowSize: options.windowSize || 2048,
+            idealSentenceLength: options.idealSentenceLength || 5,
+            idealSilenceDuration: options.idealSilenceDuration || 0.8,
+            allowGaps: options.allowGaps !== undefined ? options.allowGaps : true,
+            minSegmentLength: options.minSegmentLength || 0,
+            alignToAudioBoundaries: options.alignToAudioBoundaries || false,
 
-            fundamentalFreqMin: options.fundamentalFreqMin || 85,       // Minimum fundamental frequency of the voice
-            fundamentalFreqMax: options.fundamentalFreqMax || 255,      // Maximum fundamental frequency of the voice
-            formantFreqRanges: [                                        // Formant frequencies for human voice
-                [270, 730],    // F1
-                [840, 2290],   // F2
-                [1690, 3010]   // F3
+            fundamentalFreqMin: options.fundamentalFreqMin || 85,
+            fundamentalFreqMax: options.fundamentalFreqMax || 255,
+            formantFreqRanges: [
+                [270, 730],
+                [840, 2290],
+                [1690, 3010]
             ],
-            // Parametry pro detekci řeči
             voiceActivityThreshold: options.voiceActivityThreshold || 0.4,
             minVoiceActivityDuration: options.minVoiceActivityDuration || 0.1,
             energySmoothing: options.energySmoothing || 0.95,
             formantEmphasis: options.formantEmphasis || 0.7,
             zeroCrossingRateThreshold: options.zeroCrossingRateThreshold || 0.3
-
         };
         this.debug = options.debug || false;
     }
@@ -218,74 +212,36 @@ class AudioSentenceDetector {
         }
     }
 
-    isHumanVoice(buffer, sampleRate) {
-        const magnitudes = this.performFFT(buffer);
-        const freqResolution = sampleRate / buffer.length;
-        
-        let voiceBandEnergy = 0;
-        let totalEnergy = 0;
-        
-        for (let i = 0; i < magnitudes.length; i++) {
-            const frequency = i * freqResolution;
-            const magnitude = magnitudes[i];
-            
-            totalEnergy += magnitude;
-            
-            if (frequency >= this.options.minVoiceFreq && frequency <= this.options.maxVoiceFreq) {
-                voiceBandEnergy += magnitude;
-            }
-        }
-        
-        const voiceRatio = voiceBandEnergy / totalEnergy;
-        return voiceRatio > this.options.voiceThreshold;
-    }
-
-    bufferToStream(buffer) {
-        const stream = new Readable();
-        stream.push(buffer);
-        stream.push(null);
-        return stream;
-    }
-
     async detect(buffer) {
-        const tempFilePath = path.join(os.tmpdir(), `audio_${Date.now()}.wav`);
-
         try {
-            await new Promise((resolve, reject) => {
-                const inputStream = this.bufferToStream(buffer);
-        
-                ffmpeg(inputStream)
-                    .toFormat('wav')
-                    .on('error', (err) => {
-                        reject(new Error(`Error during conversion: ${err.message}`));
-                    })
-                    .on('end', resolve)
-                    .save(tempFilePath);
-            });
-
-            console.log("converted")
-            
-            const wavBuffer = await fs.readFile(tempFilePath);
-            const result = await this.detectSentences(wavBuffer);
-            
-            return result;  
+            const audioData = await this.getAudioData(buffer);
+            const sentences = await this.detectSentences(audioData.channelData[0], audioData.sampleRate);
+            return sentences;
         } catch (error) {
             throw new Error(`Error processing audio buffer: ${error.message}`);
-        } finally {
-            try {
-                await fs.unlink(tempFilePath);
-            } catch (cleanupError) {
-                console.warn(`Could not delete temp file ${tempFilePath}:`, cleanupError);
-            }
         }
     }
 
-    async detectSentences(buffer) {
-        const result = await wav.decode(buffer);
+    async getAudioData(buffer) {
+        return await new Promise((resolve, reject) => {
+            const audioContext = new AudioContext();
+            audioContext.decodeAudioData(buffer, (audioBuffer) => {
+                const channels = audioBuffer.numberOfChannels;
+                const sampleRate = audioBuffer.sampleRate;
+                const channelData = [];
+    
+                for (let i = 0; i < channels; i++) {
+                    channelData.push(audioBuffer.getChannelData(i));
+                }
         
-        const audioData = this.convertToMono(result.channelData);
-        const sampleRate = result.sampleRate;
-        
+                resolve({ channels, sampleRate, channelData });
+            }, (err) => {
+                reject(err);
+            });
+        });
+    }
+
+    async detectSentences(audioData, sampleRate) {
         if (this.debug) {
             console.log(`Audio loaded: ${audioData.length} samples, ${sampleRate}Hz`);
             console.log(`Audio duration: ${audioData.length / sampleRate} seconds`);
@@ -301,17 +257,17 @@ class AudioSentenceDetector {
             console.log(`Detected ${sentences.length} sentences`);
         }
 
-        return sentences;
-    }
-
-    convertToMono(channelData) {
-        if (channelData.length === 1) return channelData[0];
-        
-        const monoData = new Float32Array(channelData[0].length);
-        for (let i = 0; i < monoData.length; i++) {
-            monoData[i] = channelData.reduce((sum, channel) => sum + channel[i], 0) / channelData.length;
+        if (this.options.alignToAudioBoundaries) {
+            if (sentences.length > 0) {
+                sentences[0].start = 0;
+            
+                const lastSentence = sentences[sentences.length - 1];
+                lastSentence.end = audioData.length / sampleRate;
+                lastSentence.duration = lastSentence.end - lastSentence.start;
+            }
         }
-        return monoData;
+
+        return sentences;
     }
 
     detectSilentRegions(audioData, sampleRate) {
@@ -551,79 +507,173 @@ class AudioSentenceDetector {
     }
 
     findSentenceBoundaries(silentRegions, audioData, sampleRate) {
-        const sentences = [];
+        let sentences = [];
         let lastEnd = 0;
         const totalDuration = audioData.length / sampleRate;
 
+        // První průchod - vytvoření základních segmentů
         for (let i = 0; i < silentRegions.length; i++) {
             const region = silentRegions[i];
             const sentenceDuration = region.start - lastEnd;
 
-            if (sentenceDuration >= this.options.minSentenceLength && sentenceDuration <= this.options.maxSentenceLength) {
-                const sentence = {
-                index: sentences.length,
-                start: lastEnd,
-                end: region.start,
-                duration: sentenceDuration
-                };
+            if (sentenceDuration >= this.options.minSentenceLength && 
+                sentenceDuration <= this.options.maxSentenceLength) {
+                let segmentEnd = region.start;
                 
-                sentence.probability = this.calculateSentenceProbability(
-                sentence, 
-                audioData, 
-                sampleRate, 
-                region
-                );
+                // Pokud nemají být mezery a není to poslední region
+                if (!this.options.allowGaps && i < silentRegions.length - 1) {
+                    // Vypočítáme střed mezery mezi současným a následujícím regionem
+                    const gapMiddle = (region.end + silentRegions[i + 1].start) / 2;
+                    segmentEnd = gapMiddle;
+                }
 
-                sentences.push(sentence);
+                sentences.push({
+                    index: sentences.length,
+                    start: lastEnd,
+                    end: segmentEnd,
+                    duration: segmentEnd - lastEnd,
+                    probability: this.calculateSentenceProbability(
+                        { start: lastEnd, end: segmentEnd, duration: segmentEnd - lastEnd },
+                        audioData,
+                        sampleRate,
+                        region
+                    )
+                });
             } else if (sentenceDuration > this.options.maxSentenceLength) {
                 const numParts = Math.ceil(sentenceDuration / this.options.maxSentenceLength);
                 const partDuration = sentenceDuration / numParts;
                 
                 for (let j = 0; j < numParts; j++) {
-                const sentence = {
-                    index: sentences.length,
-                    start: lastEnd + (j * partDuration),
-                    end: lastEnd + ((j + 1) * partDuration),
-                    duration: partDuration
-                };
+                    let partEnd = lastEnd + ((j + 1) * partDuration);
+                    
+                    // Pro poslední část použijeme konec regionu nebo střed mezery
+                    if (j === numParts - 1) {
+                        if (!this.options.allowGaps && i < silentRegions.length - 1) {
+                            partEnd = (region.end + silentRegions[i + 1].start) / 2;
+                        } else {
+                            partEnd = region.start;
+                        }
+                    }
 
-                sentence.probability = this.calculateSentenceProbability(
-                    sentence,
-                    audioData,
-                    sampleRate,
-                    j === numParts - 1 ? region : null
-                );
-
-                sentences.push(sentence);
+                    sentences.push({
+                        index: sentences.length,
+                        start: lastEnd + (j * partDuration),
+                        end: partEnd,
+                        duration: partEnd - (lastEnd + (j * partDuration)),
+                        probability: this.calculateSentenceProbability(
+                            { 
+                                start: lastEnd + (j * partDuration), 
+                                end: partEnd,
+                                duration: partEnd - (lastEnd + (j * partDuration))
+                            },
+                            audioData,
+                            sampleRate,
+                            j === numParts - 1 ? region : null
+                        )
+                    });
                 }
             }
 
-            lastEnd = region.end;
+            lastEnd = this.options.allowGaps ? region.end : (
+                i < silentRegions.length - 1 ? 
+                (region.end + silentRegions[i + 1].start) / 2 : 
+                region.end
+            );
         }
 
-        // Handle the last segment if it exists
+        // Zpracování posledního segmentu
         if (lastEnd < totalDuration) {
             const remainingDuration = totalDuration - lastEnd;
             if (remainingDuration >= this.options.minSentenceLength) {
-                const sentence = {
+                sentences.push({
                     index: sentences.length,
                     start: lastEnd,
                     end: totalDuration,
-                    duration: remainingDuration
-                };
-
-                sentence.probability = this.calculateSentenceProbability(
-                    sentence,
-                    audioData,
-                    sampleRate,
-                    null
-                );
-
-                sentences.push(sentence);
+                    duration: remainingDuration,
+                    probability: this.calculateSentenceProbability(
+                        { start: lastEnd, end: totalDuration, duration: remainingDuration },
+                        audioData,
+                        sampleRate,
+                        null
+                    )
+                });
             }
         }
 
+        // Druhý průchod - spojování krátkých segmentů
+        if (this.options.minSegmentLength > 0) {
+            sentences = this.mergeShortSegments(sentences);
+        }
+
         return sentences;
+    }
+
+    mergeShortSegments(sentences) {
+        if (sentences.length <= 1) return sentences;
+
+        const mergedSegments = [];
+        let currentSegment = sentences[0];
+        let segmentsToMerge = [];
+
+        for (let i = 0; i < sentences.length; i++) {
+            const segment = sentences[i];
+            
+            if (segmentsToMerge.length === 0) {
+                segmentsToMerge.push(segment);
+                continue;
+            }
+
+            const currentDuration = segmentsToMerge.reduce((sum, seg) => sum + seg.duration, 0);
+            
+            if (currentDuration + segment.duration <= this.options.minSegmentLength) {
+                // Přidáme segment do skupiny pro spojení
+                segmentsToMerge.push(segment);
+            } else {
+                // Pokud máme nějaké segmenty ke spojení
+                if (segmentsToMerge.length > 0) {
+                    if (currentDuration >= this.options.minSegmentLength) {
+                        // Současná skupina splňuje minimální délku
+                        const mergedSegment = this.mergeSegmentGroup(segmentsToMerge);
+                        mergedSegments.push(mergedSegment);
+                        segmentsToMerge = [segment];
+                    } else {
+                        // Současná skupina je příliš krátká, spojíme ji s následujícím segmentem
+                        segmentsToMerge.push(segment);
+                        const mergedSegment = this.mergeSegmentGroup(segmentsToMerge);
+                        mergedSegments.push(mergedSegment);
+                        segmentsToMerge = [];
+                    }
+                } else {
+                    mergedSegments.push(segment);
+                }
+            }
+        }
+
+        // Zpracování zbývajících segmentů
+        if (segmentsToMerge.length > 0) {
+            const mergedSegment = this.mergeSegmentGroup(segmentsToMerge);
+            mergedSegments.push(mergedSegment);
+        }
+
+        return mergedSegments;
+    }
+
+    mergeSegmentGroup(segments) {
+        if (segments.length === 0) return null;
+        if (segments.length === 1) return segments[0];
+
+        const start = segments[0].start;
+        const end = segments[segments.length - 1].end;
+        const duration = end - start;
+        const avgProbability = segments.reduce((sum, seg) => sum + seg.probability, 0) / segments.length;
+
+        return {
+            index: segments[0].index,
+            start: start,
+            end: end,
+            duration: duration,
+            probability: avgProbability
+        };
     }
 }
 
