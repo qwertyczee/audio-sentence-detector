@@ -8,8 +8,6 @@ class AudioSentenceDetector {
             minSentenceLength: options.minSentenceLength || 1,
             maxSentenceLength: options.maxSentenceLength || 15,
             windowSize: options.windowSize || 2048,
-            idealSentenceLength: options.idealSentenceLength || 5,
-            idealSilenceDuration: options.idealSilenceDuration || 0.8,
             allowGaps: options.allowGaps !== undefined ? options.allowGaps : true,
             minSegmentLength: options.minSegmentLength || 0,
             alignToAudioBoundaries: options.alignToAudioBoundaries || false,
@@ -28,6 +26,14 @@ class AudioSentenceDetector {
             zeroCrossingRateThreshold: options.zeroCrossingRateThreshold || 0.3
         };
         this.debug = options.debug || false;
+        this.fftBuffers = {
+            real: null,
+            imag: null,
+            magnitudes: null,
+            window: null
+        };
+        this.voiceActivityBuffer = new Float32Array(1024);
+        this.memoizedFFT = new Map();
     }
 
     calculateZeroCrossingRate(buffer) {
@@ -155,26 +161,77 @@ class AudioSentenceDetector {
 
     performFFT(buffer) {
         const n = buffer.length;
-        const real = new Float32Array(n);
-        const imag = new Float32Array(n);
         
-        // Copying data and applying the Hamming window
+        if (!this.fftBuffers.real || this.fftBuffers.real.length !== n) {
+            this.fftBuffers.real = new Float32Array(n);
+            this.fftBuffers.imag = new Float32Array(n);
+            this.fftBuffers.magnitudes = new Float32Array(n / 2);
+            this.fftBuffers.window = new Float32Array(n);
+            
+            // Precompute window function
+            for (let i = 0; i < n; i++) {
+                this.fftBuffers.window[i] = 0.54 - 0.46 * Math.cos((2 * Math.PI * i) / (n - 1));
+            }
+        }
+
         for (let i = 0; i < n; i++) {
-            const window = 0.54 - 0.46 * Math.cos((2 * Math.PI * i) / (n - 1));
-            real[i] = buffer[i] * window;
-            imag[i] = 0;
+            this.fftBuffers.real[i] = buffer[i] * this.fftBuffers.window[i];
+            this.fftBuffers.imag[i] = 0;
         }
 
         // In-place FFT
-        this.fft(real, imag);
+        this.fftIterative(this.fftBuffers.real, this.fftBuffers.imag);
         
-        // Calculation of magnitudes
-        const magnitudes = new Float32Array(n / 2);
         for (let i = 0; i < n / 2; i++) {
-            magnitudes[i] = Math.sqrt(real[i] * real[i] + imag[i] * imag[i]);
+            this.fftBuffers.magnitudes[i] = Math.sqrt(
+                this.fftBuffers.real[i] * this.fftBuffers.real[i] + 
+                this.fftBuffers.imag[i] * this.fftBuffers.imag[i]
+            );
         }
         
-        return magnitudes;
+        return this.fftBuffers.magnitudes;
+    }
+
+    fftIterative(real, imag) {
+        const n = real.length;
+        
+        // Bit reversal
+        for (let i = 0; i < n; i++) {
+            const j = this.reverseBits(i, Math.log2(n));
+            if (j > i) {
+                [real[i], real[j]] = [real[j], real[i]];
+                [imag[i], imag[j]] = [imag[j], imag[i]];
+            }
+        }
+        
+        // Butterfly operations
+        for (let size = 2; size <= n; size *= 2) {
+            const halfSize = size / 2;
+            const angle = -2 * Math.PI / size;
+            
+            for (let i = 0; i < n; i += size) {
+                for (let j = 0; j < halfSize; j++) {
+                    const tReal = real[i + j + halfSize] * Math.cos(angle * j) - 
+                                imag[i + j + halfSize] * Math.sin(angle * j);
+                    const tImag = real[i + j + halfSize] * Math.sin(angle * j) + 
+                                imag[i + j + halfSize] * Math.cos(angle * j);
+                    
+                    real[i + j + halfSize] = real[i + j] - tReal;
+                    imag[i + j + halfSize] = imag[i + j] - tImag;
+                    real[i + j] += tReal;
+                    imag[i + j] += tImag;
+                }
+            }
+        }
+    }
+
+    reverseBits(x, bits) {
+        let result = 0;
+        for (let i = 0; i < bits; i++) {
+            result = (result << 1) | (x & 1);
+            x >>= 1;
+        }
+        return result;
     }
 
     fft(real, imag) {
@@ -258,9 +315,18 @@ class AudioSentenceDetector {
         }
 
         if (this.options.alignToAudioBoundaries) {
-            if (sentences.length > 0) {
-                sentences[0].start = 0;
-            
+            if (sentences.length === 0) {
+                sentences.push({
+                    index: 0,
+                    start: 0,
+                    end: audioData.length / sampleRate,
+                    duration: audioData.length / sampleRate
+                });
+            } else {
+                if (sentences[0].start !== 0) {
+                    sentences[0].start = 0;
+                }
+
                 const lastSentence = sentences[sentences.length - 1];
                 lastSentence.end = audioData.length / sampleRate;
                 lastSentence.duration = lastSentence.end - lastSentence.start;
@@ -374,144 +440,11 @@ class AudioSentenceDetector {
         return mergedRegions;
     }
 
-    calculateSentenceProbability(sentence, audioData, sampleRate, silentRegion) {
-        // 1. Length Score (0-1)
-        // Using a normalized Gaussian function for length scoring
-        const lengthScore = Math.max(0, Math.min(1, Math.exp(
-            -Math.pow(sentence.duration - this.options.idealSentenceLength, 2) / 
-            (2 * Math.pow(this.options.idealSentenceLength / 2, 2))
-        )));
-
-        // 2. Silence Strength Score (0-1)
-        // Linear interpolation with bounds checking
-        const silenceStrengthScore = silentRegion ? 
-            Math.max(0, Math.min(1, 1 - (silentRegion.avgRMS / this.options.silenceThreshold))) : 0.3;
-
-        // 3. Silence Duration Score (0-1)
-        // Smooth transition with sigmoid function
-        const silenceDurationScore = silentRegion ? 
-            Math.max(0, Math.min(1,
-                1 / (1 + Math.exp(-5 * (silentRegion.duration / this.options.idealSilenceDuration - 0.5)))
-            )) : 0.3;
-
-        // 4. Voice Analysis Score (0-1)
-        const windowSize = Math.floor(0.1 * sampleRate);
-        const startSampleIndex = Math.floor(sentence.start * sampleRate);
-        const endSampleIndex = Math.floor(sentence.end * sampleRate);
-
-        // Analyze multiple windows for more robust voice detection
-        const numWindows = 3;
-        let startVoiceScore = 0;
-        let endVoiceScore = 0;
-
-        for (let i = 0; i < numWindows; i++) {
-            // Analyze start of sentence
-            const startOffset = i * (windowSize / 2);
-            const startWindow = audioData.slice(
-                startSampleIndex + startOffset,
-                Math.min(startSampleIndex + startOffset + windowSize, endSampleIndex)
-            );
-            
-            // Analyze end of sentence
-            const endWindow = audioData.slice(
-                Math.max(endSampleIndex - windowSize - startOffset, startSampleIndex),
-                endSampleIndex - startOffset
-            );
-
-            if (startWindow.length > 0) {
-                startVoiceScore += this.isVoiceSegment(startWindow, sampleRate) ? 1 : 0;
-            }
-            
-            if (endWindow.length > 0) {
-                endVoiceScore += this.isVoiceSegment(endWindow, sampleRate) ? 1 : 0;
-            }
-        }
-
-        // Normalize voice scores
-        startVoiceScore /= numWindows;
-        endVoiceScore /= numWindows;
-
-        // Calculate voice transition score
-        const voiceTransitionScore = Math.max(0, Math.min(1,
-            (startVoiceScore * 0.7 + (1 - endVoiceScore) * 0.3)
-        ));
-
-        // 5. Energy Contour Score (0-1)
-        const energyContourScore = this.calculateEnergyContour(
-            audioData.slice(startSampleIndex, endSampleIndex),
-            sampleRate
-        );
-
-        // Final probability calculation with weighted components
-        const weights = {
-            length: 0.25,
-            silenceStrength: 0.15,
-            silenceDuration: 0.15,
-            voiceTransition: 0.25,
-            energyContour: 0.20
-        };
-
-        const probability = 
-            lengthScore * weights.length +
-            silenceStrengthScore * weights.silenceStrength +
-            silenceDurationScore * weights.silenceDuration +
-            voiceTransitionScore * weights.voiceTransition +
-            energyContourScore * weights.energyContour;
-
-        // Ensure final probability is between 0 and 1
-        const normalizedProbability = Math.max(0, Math.min(1, probability));
-
-        if (this.debug) {
-            console.log('Sentence probability components:', {
-                length: lengthScore,
-                silenceStrength: silenceStrengthScore,
-                silenceDuration: silenceDurationScore,
-                voiceTransition: voiceTransitionScore,
-                energyContour: energyContourScore,
-                final: normalizedProbability
-            });
-        }
-
-        return normalizedProbability;
-    }
-
-    calculateEnergyContour(segment, sampleRate) {
-        const windowSize = Math.floor(0.05 * sampleRate); // 50ms windows
-        const numWindows = Math.floor(segment.length / windowSize);
-        const energies = [];
-
-        // Calculate energy for each window
-        for (let i = 0; i < numWindows; i++) {
-            const start = i * windowSize;
-            const end = start + windowSize;
-            const window = segment.slice(start, end);
-            
-            const energy = window.reduce((sum, sample) => sum + sample * sample, 0) / window.length;
-            energies.push(energy);
-        }
-
-        if (energies.length < 2) return 0.5;
-
-        // Analyze energy contour
-        let risesCount = 0;
-        let fallsCount = 0;
-
-        for (let i = 1; i < energies.length; i++) {
-            if (energies[i] > energies[i-1] * 1.1) risesCount++;
-            if (energies[i] < energies[i-1] * 0.9) fallsCount++;
-        }
-
-        // Natural speech typically has a mix of rises and falls
-        const dynamicRatio = Math.min(risesCount, fallsCount) / Math.max(risesCount, fallsCount);
-        return Math.max(0, Math.min(1, dynamicRatio));
-    }
-
     findSentenceBoundaries(silentRegions, audioData, sampleRate) {
         let sentences = [];
         let lastEnd = 0;
         const totalDuration = audioData.length / sampleRate;
 
-        // První průchod - vytvoření základních segmentů
         for (let i = 0; i < silentRegions.length; i++) {
             const region = silentRegions[i];
             const sentenceDuration = region.start - lastEnd;
@@ -520,9 +453,7 @@ class AudioSentenceDetector {
                 sentenceDuration <= this.options.maxSentenceLength) {
                 let segmentEnd = region.start;
                 
-                // Pokud nemají být mezery a není to poslední region
                 if (!this.options.allowGaps && i < silentRegions.length - 1) {
-                    // Vypočítáme střed mezery mezi současným a následujícím regionem
                     const gapMiddle = (region.end + silentRegions[i + 1].start) / 2;
                     segmentEnd = gapMiddle;
                 }
@@ -531,13 +462,7 @@ class AudioSentenceDetector {
                     index: sentences.length,
                     start: lastEnd,
                     end: segmentEnd,
-                    duration: segmentEnd - lastEnd,
-                    probability: this.calculateSentenceProbability(
-                        { start: lastEnd, end: segmentEnd, duration: segmentEnd - lastEnd },
-                        audioData,
-                        sampleRate,
-                        region
-                    )
+                    duration: segmentEnd - lastEnd
                 });
             } else if (sentenceDuration > this.options.maxSentenceLength) {
                 const numParts = Math.ceil(sentenceDuration / this.options.maxSentenceLength);
@@ -546,7 +471,6 @@ class AudioSentenceDetector {
                 for (let j = 0; j < numParts; j++) {
                     let partEnd = lastEnd + ((j + 1) * partDuration);
                     
-                    // Pro poslední část použijeme konec regionu nebo střed mezery
                     if (j === numParts - 1) {
                         if (!this.options.allowGaps && i < silentRegions.length - 1) {
                             partEnd = (region.end + silentRegions[i + 1].start) / 2;
@@ -559,17 +483,7 @@ class AudioSentenceDetector {
                         index: sentences.length,
                         start: lastEnd + (j * partDuration),
                         end: partEnd,
-                        duration: partEnd - (lastEnd + (j * partDuration)),
-                        probability: this.calculateSentenceProbability(
-                            { 
-                                start: lastEnd + (j * partDuration), 
-                                end: partEnd,
-                                duration: partEnd - (lastEnd + (j * partDuration))
-                            },
-                            audioData,
-                            sampleRate,
-                            j === numParts - 1 ? region : null
-                        )
+                        duration: partEnd - (lastEnd + (j * partDuration))
                     });
                 }
             }
@@ -581,7 +495,6 @@ class AudioSentenceDetector {
             );
         }
 
-        // Zpracování posledního segmentu
         if (lastEnd < totalDuration) {
             const remainingDuration = totalDuration - lastEnd;
             if (remainingDuration >= this.options.minSentenceLength) {
@@ -589,18 +502,11 @@ class AudioSentenceDetector {
                     index: sentences.length,
                     start: lastEnd,
                     end: totalDuration,
-                    duration: remainingDuration,
-                    probability: this.calculateSentenceProbability(
-                        { start: lastEnd, end: totalDuration, duration: remainingDuration },
-                        audioData,
-                        sampleRate,
-                        null
-                    )
+                    duration: remainingDuration
                 });
             }
         }
 
-        // Druhý průchod - spojování krátkých segmentů
         if (this.options.minSegmentLength > 0) {
             sentences = this.mergeShortSegments(sentences);
         }
@@ -665,14 +571,12 @@ class AudioSentenceDetector {
         const start = segments[0].start;
         const end = segments[segments.length - 1].end;
         const duration = end - start;
-        const avgProbability = segments.reduce((sum, seg) => sum + seg.probability, 0) / segments.length;
 
         return {
             index: segments[0].index,
             start: start,
             end: end,
-            duration: duration,
-            probability: avgProbability
+            duration: duration
         };
     }
 }
